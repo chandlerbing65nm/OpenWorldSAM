@@ -278,8 +278,8 @@ class OpenWorldSAM2(nn.Module):
                            * Other information that's included in the original dicts, such as:
                              "height", "width" (int): the output resolution of the model (may be different
                              from input resolution), used in inference.
-                           * prompt: String, a prompt for the corresponding image
-                           * input_id: Tensor, the tokenized input_ids for the corresponding prompt
+                           * prompts: a list of prompts for the corresponding image
+                           * unique_categories: unique IDs for the corresponding prompt
                 Returns:
                     dict[str, Tensor]:
                 """

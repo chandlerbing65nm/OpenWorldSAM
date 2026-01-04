@@ -2,6 +2,7 @@
 import colorsys
 import logging
 import math
+import os
 import numpy as np
 from enum import Enum, unique
 import cv2
@@ -21,7 +22,7 @@ from detectron2.utils.colormap import random_color
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ColorMode", "VisImage", "Visualizer"]
+__all__ = ["ColorMode", "VisImage", "Visualizer", "SegmentationResultVisualizer"]
 
 
 _SMALL_OBJECT_AREA_THRESH = 1000
@@ -496,6 +497,10 @@ class Visualizer:
         Returns:
             output (VisImage): image object with visualizations.
         """
+        if isinstance(panoptic_seg, np.ndarray):
+            # torch ops below expect tensors; ensure CPU tensor with integer ids.
+            panoptic_seg = torch.as_tensor(panoptic_seg, dtype=torch.int64)
+
         pred = _PanopticPrediction(panoptic_seg, segments_info, self.metadata)
 
         if self._instance_mode == ColorMode.IMAGE_BW:
@@ -1277,3 +1282,126 @@ class Visualizer:
             to the image.
         """
         return self.output
+
+
+class SegmentationResultVisualizer:
+    """
+    Lightweight helper that wraps Detectron2's Visualizer to save task-specific
+    segmentation predictions to disk.
+    """
+
+    def __init__(self, metadata=None, instance_mode=ColorMode.IMAGE, input_format: str = "BGR", refer_alpha: float = 0.6):
+        self.metadata = metadata
+        self.instance_mode = instance_mode
+        self.input_format = input_format.upper()
+        self.refer_alpha = refer_alpha
+
+    def _as_rgb(self, image: np.ndarray) -> np.ndarray:
+        if image.ndim != 3 or image.shape[2] != 3:
+            raise ValueError("SegmentationResultVisualizer expects HxWx3 images.")
+        if self.input_format == "BGR":
+            return image[:, :, ::-1]
+        return image
+
+    def _save_vis_image(self, vis_output: "VisImage", save_path: str):
+        directory = os.path.dirname(save_path)
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
+        vis_output.save(save_path)
+
+    def _save_rgb_image(self, image: np.ndarray, save_path: str):
+        directory = os.path.dirname(save_path)
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
+        Image.fromarray(image).save(save_path)
+
+    def _build_visualizer(self, image: np.ndarray) -> "Visualizer":
+        rgb_image = self._as_rgb(image)
+        return Visualizer(rgb_image, metadata=self.metadata, instance_mode=self.instance_mode)
+
+    def save_instance_result(self, image: np.ndarray, instances, output_path: str):
+        """
+        Draw and save instance segmentation predictions.
+        """
+        visualizer = self._build_visualizer(image)
+        vis_output = visualizer.output
+        if instances is not None:
+            instances = instances.to("cpu")
+            if len(instances) > 0:
+                vis_output = visualizer.draw_instance_predictions(instances)
+        self._save_vis_image(vis_output, output_path)
+
+    def save_semantic_result(self, image: np.ndarray, sem_seg, output_path: str):
+        """
+        Draw semantic segmentation logits or label maps.
+        """
+        if isinstance(sem_seg, torch.Tensor):
+            data = sem_seg.clone()
+            if data.dim() == 3:
+                data = data.argmax(0)
+            sem_seg_np = data.to(torch.int64).cpu().numpy()
+        else:
+            sem_seg_np = sem_seg
+        visualizer = self._build_visualizer(image)
+        vis_output = visualizer.draw_sem_seg(sem_seg_np, area_threshold=0, alpha=0.6)
+        self._save_vis_image(vis_output, output_path)
+
+    def save_panoptic_result(self, image: np.ndarray, panoptic_output, output_path: str):
+        """
+        Draw panoptic segmentation predictions.
+        """
+        panoptic_seg, segments_info = panoptic_output
+        if isinstance(panoptic_seg, torch.Tensor):
+            panoptic_seg = panoptic_seg.to(torch.int64).cpu().numpy()
+        visualizer = self._build_visualizer(image)
+        vis_output = visualizer.draw_panoptic_seg(panoptic_seg, segments_info)
+        self._save_vis_image(vis_output, output_path)
+
+    def save_referring_result(self, image: np.ndarray, masks, prompts, output_path: str, scores=None):
+        """
+        Overlay referring expression masks with prompt labels.
+        """
+        if masks is None:
+            self._save_rgb_image(self._as_rgb(image), output_path)
+            return
+
+        if torch.is_tensor(masks):
+            mask_array = masks.detach().cpu().numpy()
+        else:
+            mask_array = np.asarray(masks)
+
+        if mask_array.size == 0:
+            self._save_rgb_image(self._as_rgb(image), output_path)
+            return
+
+        prompts = list(prompts)
+        if scores is not None:
+            if torch.is_tensor(scores):
+                score_values = scores.detach().cpu().tolist()
+            else:
+                score_values = list(scores)
+        else:
+            score_values = None
+
+        visualizer = self._build_visualizer(image)
+        vis_output = visualizer.output
+        for idx, mask in enumerate(mask_array):
+            if mask.ndim == 3:
+                mask = mask.squeeze(0)
+            if mask.size == 0:
+                continue
+            binary_mask = mask >= 0.5
+            if not binary_mask.any():
+                continue
+            label = prompts[idx] if idx < len(prompts) else f"mask_{idx}"
+            if score_values is not None and idx < len(score_values):
+                label = f"{label} ({score_values[idx]:.2f})"
+            color = random_color(rgb=True, maximum=1.0)
+            vis_output = visualizer.draw_binary_mask(
+                binary_mask.astype(np.uint8),
+                color=color,
+                text=label,
+                alpha=0.5,
+            )
+
+        self._save_vis_image(vis_output, output_path)

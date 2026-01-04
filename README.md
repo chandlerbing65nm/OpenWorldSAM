@@ -20,6 +20,7 @@ OpenWorldSAM pushes the boundaries of SAM2 by enabling **open-vocabulary segment
 
 ## 📢 News
 
+- **[2026-1-4]**: Demo release: we’ve added simple demos to run OpenWorldSAM on images using textual prompts.  👉 [Try OpenWorldSAM on your own data](#try-openworldsam-on-your-own-data)
 - **[2025-11-8]**: Launch the project page.
 
 ## ⚙️ Environment Setup
@@ -169,6 +170,34 @@ Specific datasets:
   python train_net.py --config-file configs/refcoco/Open-World-SAM2-CrossAttention.yaml --eval-only
   ```
 
+## Try OpenWorldSAM on your own data 
+
+See [DEMO_README.md](demo/README.md) for details.
+
+Example on instance, semantic, and ponoptic segmentation on COCO-style images:
+
+| Image                        | Instance                                              | Semantic                               | Panoptic                               |
+| ---------------------------- | ----------------------------------------------------- | -------------------------------------- | -------------------------------------- |
+| ![](demo/images/giraffe.jpg) | ![](demo/outputs/giraffe_instance__nms0.5_iou0.7.png) | ![](demo/outputs/giraffe_semantic.png) | ![](demo/outputs/giraffe_panoptic.png) |
+
+Examples on instance and referring expression segmentation on common objects:
+
+| Image                      | Instance                                           | Referring Expression                  |
+| -------------------------- | -------------------------------------------------- | ------------------------------------- |
+| ![](demo/images/zebra.jpg)   | ![](demo/outputs/zebra_instance_nms0.3_iou0.8.png)   | ![](demo/outputs/zebra_referring.png)   |
+| ![](demo/images/dog.jpg)   | ![](demo/outputs/dog_instance_nms0.3_iou0.9.png)   | ![](demo/outputs/dog_referring.png)   |
+| ![](demo/images/donut.jpg) | ![](demo/outputs/donut_instance_nms0.2_iou0.9.png) | ![](demo/outputs/donut_referring.png) |
+| ![](demo/images/cake.jpg)  | ![](demo/outputs/cake_instance_nms0.3_iou0.9.png)  | ![](demo/outputs/cake_referring.png)  |
+
+Examples on referring expression segmentation on long-tail objects and out-of-distribution images:
+
+|                  | Image                          | Referring Expression                    |
+| ---------------- | ------------------------------ | --------------------------------------- |
+| OOD image        | ![](demo/images/xray_hand.jpg) | ![](demo/outputs/xray_referring.png)    |
+| Long-tail object | ![](demo/images/ukulele.jpg)   | ![](demo/outputs/ukulele_referring.png) |
+
+
+
 
 ## Project Structure
 
@@ -177,6 +206,7 @@ Specific datasets:
 - `evaluation/`: Evaluation utilities including language-guided metrics.
 - `model/`: OpenWorldSAM model components and SAM2 extensions.
 - `train_net.py`: Entry point for training and evaluation.
+- `demo/`: Inference demos.
 
 ## 🔗 Acknowledgements
 
