@@ -32,7 +32,7 @@ python demo/<script>.py --config-file <cfg.yaml> --weights <model.pth> --image /
 
 ### Instance segmentation (`instance_inference.py`)
 
-Produces per-instance masks, scores, and boxes for the requested categories and saves a visualization via Detectron2’s `Visualizer`. On COCO for reference:
+Produces per-instance masks, scores, and boxes for the requested categories and saves a visualization via Detectron2’s `Visualizer`. On COCO-style data for reference:
 
 ```bash
 python demo/instance_inference.py \
@@ -54,7 +54,7 @@ cfg.MODEL.OpenWorldSAM2.TEST.IOU_THRESHOLD = 0.8
 
 ### Semantic segmentation (`semantic_inference.py`)
 
-Generates class-wise logits conditioned on the prompts and renders a semantic map overlay. On ADE20K-150 for reference:
+Generates class-wise logits conditioned on the prompts and renders a semantic map overlay. On COCO-style data for reference:
 
 ```bash
 python demo/semantic_inference.py \
@@ -67,7 +67,7 @@ python demo/semantic_inference.py \
 
 ### Panoptic segmentation (`panoptic_inference.py`)
 
-Runs the panoptic head, returning `(panoptic_seg, segments_info)` and saving the rendered mask. On COCO for reference:
+Runs the panoptic head, returning `(panoptic_seg, segments_info)` and saving the rendered mask. On COCO-style data for reference:
 
 ```bash
 python demo/panoptic_inference.py \
