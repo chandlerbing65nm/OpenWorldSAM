@@ -111,7 +111,9 @@ class OpenWorldSAM2(nn.Module):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_config, padding_side="right", use_fast=False)
 
         # EVF-SAM2 model
-        evf_sam2 = EvfSam2Model.from_pretrained(evf_config, low_cpu_mem_usage=True, **kwargs)
+        # Use standard loading (low_cpu_mem_usage=False) to avoid meta tensors that
+        # cause errors when the model is later moved to a device by Detectron2.
+        evf_sam2 = EvfSam2Model.from_pretrained(evf_config, **kwargs)
         evf_sam2.config.eos_token_id = tokenizer.eos_token_id
         evf_sam2.config.bos_token_id = tokenizer.bos_token_id
         evf_sam2.config.pad_token_id = tokenizer.pad_token_id
@@ -120,8 +122,9 @@ class OpenWorldSAM2(nn.Module):
         visual_model = evf_sam2.visual_model
         print("Loading SAM2 model from {}...".format(cfg.MODEL.OpenWorldSAM2.VISION_PRETRAINED))
         visual_model.load_state_dict(torch.load(cfg.MODEL.OpenWorldSAM2.VISION_PRETRAINED)["model"], strict=False)
+        train_visual_encoder = cfg.MODEL.OpenWorldSAM2.TRAIN_VISUAL_ENCODER
         for param in visual_model.parameters():
-            param.requires_grad = False
+            param.requires_grad = train_visual_encoder
 
         # BEiT-3 model
         mm_extractor = evf_sam2.mm_extractor
@@ -555,7 +558,23 @@ class OpenWorldSAM2(nn.Module):
             if self.training:
                 gt_instances = batched_inputs[img_idx]["instances"]
                 if not isinstance(gt_instances, list):
-                    gt_instances = [gt_instances]
+                    unique_categories = batched_inputs[img_idx].get("unique_categories", [])
+                    if len(unique_categories) == 0:
+                        unique_categories = torch.unique(gt_instances.gt_classes).tolist()
+
+                    grouped_instances = []
+                    for category_id in unique_categories:
+                        category_mask = gt_instances.gt_classes == category_id
+                        if not category_mask.any():
+                            continue
+
+                        category_instances = Instances(gt_instances.image_size)
+                        category_instances.gt_classes = gt_instances.gt_classes[category_mask]
+                        category_instances.gt_masks = gt_instances.gt_masks[category_mask]
+                        category_instances.gt_boxes = gt_instances.gt_boxes[category_mask]
+                        grouped_instances.append(category_instances)
+
+                    gt_instances = grouped_instances
 
                 # For per-prompt matching, we need to split the predictions by prompt
                 num_prompts = len(gt_instances)
@@ -596,7 +615,15 @@ class OpenWorldSAM2(nn.Module):
     def prepare_targets(self, targets):
         new_targets = []
         for targets_per_image in targets:
-            gt_masks = targets_per_image.gt_masks.to(dtype=self.dtype, device=self.device)
+            gt_masks = targets_per_image.gt_masks
+
+            # Convert Detectron2 BitMasks to a raw tensor before moving to device/dtype,
+            # so downstream loss/matching code (which expects Tensors) works for both
+            # instance and semantic pseudo-instance supervision.
+            if isinstance(gt_masks, BitMasks):
+                gt_masks = gt_masks.tensor
+
+            gt_masks = gt_masks.to(dtype=self.dtype, device=self.device)
             # unlike traditional instance segmentation model that predicts for every instance,
             # we only want instances that correspond to the prompt queries (conditional predictions),
             # so we set the labels to 0 for all instances (label doesn't matter for conditional predictions)

@@ -2,7 +2,7 @@
 .vscode/
 /vis
 /infer
-/*.sh
+# /*.sh
 /runs
 /video_exp
 /model/segment_anything_2/sam2/_C.so
@@ -14,3 +14,6 @@ checkpoints/
 .ipynb_checkpoints/
 *.json
 output/
+output_*/
+demo/
+logs/

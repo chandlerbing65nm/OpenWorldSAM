@@ -34,6 +34,28 @@ def load_image_into_numpy_array(
     return array
 
 
+def decode_rgb_semantic_mask(semseg, colors, ignore_label):
+    if semseg.ndim == 2:
+        return semseg
+
+    decoded = np.full(semseg.shape[:2], ignore_label, dtype=np.int64)
+    for class_id, color in enumerate(colors):
+        color_arr = np.asarray(color, dtype=semseg.dtype)
+        decoded[np.all(semseg == color_arr, axis=-1)] = class_id
+    return decoded
+
+
+def decode_rgb_semantic_mask_with_mapping(semseg, color_to_class_id, ignore_label):
+    if semseg.ndim == 2:
+        return semseg
+
+    decoded = np.full(semseg.shape[:2], ignore_label, dtype=np.int64)
+    for color, class_id in color_to_class_id.items():
+        color_arr = np.asarray(color, dtype=semseg.dtype)
+        decoded[np.all(semseg == color_arr, axis=-1)] = class_id
+    return decoded
+
+
 class SemSegEvaluator(DatasetEvaluator):
     """
     Evaluate semantic segmentation metrics.
@@ -87,6 +109,12 @@ class SemSegEvaluator(DatasetEvaluator):
         self._class_offset = meta.class_offset if hasattr(meta, 'class_offset') else 0
         self._num_classes = len(meta.stuff_classes)
         self._semseg_loader = meta.semseg_loader if hasattr(meta, 'semseg_loader') else 'PIL'
+        self._suim_rgb_mask = getattr(meta, "suim_rgb_mask", False)
+        self._suim_color_to_class_id = getattr(meta, "suim_color_to_class_id", None)
+        self._dutuseg_rgb_mask = getattr(meta, "dutuseg_rgb_mask", False)
+        self._coralscapes_label_shift = getattr(meta, "coralscapes_label_shift", False)
+        self._jpeg_void_remap = getattr(meta, "ciona17_jpeg_void_remap", False)
+        self._stuff_colors = getattr(meta, "stuff_colors", None)
 
         if num_classes is not None:
             assert self._num_classes == num_classes, f"{self._num_classes} != {num_classes}"
@@ -112,14 +140,31 @@ class SemSegEvaluator(DatasetEvaluator):
             
             with PathManager.open(self.input_file_to_gt_file[input["file_name"]], "rb") as f:
                 gt = load_semseg(f, self._semseg_loader) - self._class_offset
-                
-            if isinstance(self._ignore_label, int):
-                ignore_label = self._ignore_label - self._class_offset
-                gt[gt == self._ignore_label] = self._num_classes
-            elif isinstance(self._ignore_label, list):
-                for ignore_label in self._ignore_label:
-                    ignore_label = ignore_label - self._class_offset
-                    gt[gt == ignore_label] = self._num_classes
+
+            if self._suim_rgb_mask:
+                if self._suim_color_to_class_id is not None:
+                    gt = decode_rgb_semantic_mask_with_mapping(gt, self._suim_color_to_class_id, self._num_classes)
+                else:
+                    gt = decode_rgb_semantic_mask(gt, self._stuff_colors, self._num_classes)
+            if self._dutuseg_rgb_mask:
+                gt = decode_rgb_semantic_mask(gt, self._stuff_colors, self._num_classes)
+            if self._coralscapes_label_shift:
+                gt = gt.copy().astype(np.int64)
+                gt[gt == 0] = self._num_classes
+                valid_mask = gt != self._num_classes
+                gt[valid_mask] = gt[valid_mask] - 1
+            if self._jpeg_void_remap:
+                gt = gt.copy()
+                gt[gt == 3] = 0
+                gt[gt > 3] = self._num_classes
+            elif not self._coralscapes_label_shift:
+                if isinstance(self._ignore_label, int):
+                    ignore_label = self._ignore_label - self._class_offset
+                    gt[gt == self._ignore_label] = self._num_classes
+                elif isinstance(self._ignore_label, list):
+                    for ignore_label in self._ignore_label:
+                        ignore_label = ignore_label - self._class_offset
+                        gt[gt == ignore_label] = self._num_classes
                     
             self._conf_matrix += np.bincount(
                 (self._num_classes + 1) * pred.reshape(-1) + gt.reshape(-1),

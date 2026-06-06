@@ -292,6 +292,9 @@ class OpenWorldSAM2InstanceDatasetMapperAll:
 
             # Sample at most 6 unique categories to prevent memory explosion
             unique_categories = list(category_to_instances.keys())
+            if len(unique_categories) == 0:
+                dataset_dict["instances"] = [instances]
+                return dataset_dict
             if len(unique_categories) > 6:
                 sampled_categories = random.sample(unique_categories, 6)
                 # Filter category_to_instances to only include sampled categories

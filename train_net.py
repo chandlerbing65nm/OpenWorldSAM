@@ -177,18 +177,22 @@ class Trainer(DefaultTrainer):
 
     @classmethod
     def build_test_loader(cls, cfg, dataset_name):
-        if dataset_name in ["coco_2017_val", "ade20k_instance_val"]:
-            mapper = OpenWorldSAM2InstanceDatasetMapper(cfg, is_train=False)
+        evaluator_type = MetadataCatalog.get(dataset_name).evaluator_type
+        if evaluator_type == "coco":
+            if cfg.INPUT.DATASET_MAPPER_NAME == "open_world_instance_all":
+                mapper = OpenWorldSAM2InstanceDatasetMapperAll(cfg, is_train=False)
+            else:
+                mapper = OpenWorldSAM2InstanceDatasetMapper(cfg, is_train=False)
+        elif evaluator_type == "sem_seg":
+            mapper = OpenWorldSAM2SemanticDatasetMapper(cfg, is_train=False)
         elif dataset_name in ["coco_2017_val_panoptic_with_sem_seg", "ade20k_panoptic_val"]:
             mapper = OpenWorldSAM2PanopticDatasetMapper(cfg, is_train=False)
         elif dataset_name in ["scannet_21_panoptic_val"]:
             mapper = ScanNetPanoDatasetMapper(cfg, is_train=False)
-        elif dataset_name in ["ade20k_full_sem_seg_val", "pascal_context_459_sem_seg_val",
-                              "pascal_context_59_sem_seg_val", "pascalvoc20_sem_seg_val",
-                              "sunrgbd_37_val_seg", "scannet_21_val_seg", "scannet_41_val_seg"]:
-            mapper = OpenWorldSAM2SemanticDatasetMapper(cfg, is_train=False)
         elif dataset_name in ["refcocog_val_umd"]:
             mapper = RefCOCODatasetMapper(cfg, is_train=False)
+        else:
+            mapper = None
         return build_detection_test_loader(cfg, dataset_name=dataset_name, mapper=mapper)
 
     @classmethod
@@ -197,7 +201,11 @@ class Trainer(DefaultTrainer):
         Modify train loader to use a fixed subset of dataset.
         """
         # Choose the appropriate dataset mapper
-        if cfg.INPUT.DATASET_MAPPER_NAME == "open_world_instance":
+        train_dataset_name = cfg.DATASETS.TRAIN[0] if len(cfg.DATASETS.TRAIN) else None
+        train_evaluator_type = MetadataCatalog.get(train_dataset_name).evaluator_type if train_dataset_name else None
+        if train_evaluator_type == "sem_seg":
+            mapper = OpenWorldSAM2SemanticDatasetMapper(cfg, is_train=True)
+        elif cfg.INPUT.DATASET_MAPPER_NAME == "open_world_instance":
             mapper = OpenWorldSAM2InstanceDatasetMapper(cfg, is_train=True)
         elif cfg.INPUT.DATASET_MAPPER_NAME == "open_world_instance_all":
             mapper = OpenWorldSAM2InstanceDatasetMapperAll(cfg, is_train=True)

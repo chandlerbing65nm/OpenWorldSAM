@@ -100,6 +100,49 @@ def load_image_into_numpy_array(
     return array
 
 
+def decode_rgb_semantic_mask(semseg: np.ndarray, colors, ignore_label: int) -> np.ndarray:
+    if semseg.ndim == 2:
+        return semseg
+
+    decoded = np.full(semseg.shape[:2], ignore_label, dtype=np.int32)
+    for class_id, color in enumerate(colors):
+        color_arr = np.asarray(color, dtype=semseg.dtype)
+        decoded[np.all(semseg == color_arr, axis=-1)] = class_id
+    return decoded
+
+
+def decode_rgb_semantic_mask_with_mapping(semseg: np.ndarray, color_to_class_id, ignore_label: int) -> np.ndarray:
+    if semseg.ndim == 2:
+        return semseg
+
+    decoded = np.full(semseg.shape[:2], ignore_label, dtype=np.int32)
+    for color, class_id in color_to_class_id.items():
+        color_arr = np.asarray(color, dtype=semseg.dtype)
+        decoded[np.all(semseg == color_arr, axis=-1)] = class_id
+    return decoded
+
+
+def normalize_semantic_mask(semseg: np.ndarray, metadata, ignore_label: int) -> np.ndarray:
+    if getattr(metadata, "suim_rgb_mask", False):
+        color_to_class_id = getattr(metadata, "suim_color_to_class_id", None)
+        if color_to_class_id is not None:
+            semseg = decode_rgb_semantic_mask_with_mapping(semseg, color_to_class_id, ignore_label)
+        else:
+            semseg = decode_rgb_semantic_mask(semseg, metadata.stuff_colors, ignore_label)
+    if getattr(metadata, "dutuseg_rgb_mask", False):
+        semseg = decode_rgb_semantic_mask(semseg, metadata.stuff_colors, ignore_label)
+    if getattr(metadata, "coralscapes_label_shift", False):
+        semseg = semseg.copy().astype(np.int32)
+        semseg[semseg == 0] = ignore_label
+        valid_mask = semseg != ignore_label
+        semseg[valid_mask] = semseg[valid_mask] - 1
+    if getattr(metadata, "ciona17_jpeg_void_remap", False):
+        semseg = semseg.copy()
+        semseg[semseg == 3] = 0
+        semseg[semseg > 3] = ignore_label
+    return semseg
+
+
 class OpenWorldSAM2SemanticDatasetMapper:
     """
     A callable which takes a BDD dataset dict in Detectron2 Dataset format,
@@ -193,6 +236,7 @@ class OpenWorldSAM2SemanticDatasetMapper:
         # read sem seg file
         gt_filename = dataset_dict["sem_seg_file_name"]
         semseg = load_image_into_numpy_array(gt_filename, dtype=int)
+        semseg = normalize_semantic_mask(semseg, self.metadata, self.ignore_label)
         dataset_dict['semseg'] = torch.from_numpy(semseg.astype(np.int32))
 
         # get unique ids
@@ -210,6 +254,26 @@ class OpenWorldSAM2SemanticDatasetMapper:
         if len(unique_categories) == 0:
             dataset_dict["unique_categories"] = [0]
             dataset_dict["prompt"] = ["object"]
+
+        # Create pseudo-instance annotations per semantic class so that the
+        # OpenWorldSAM2 training code, which expects an "instances" field,
+        # can compute losses without requiring changes to the meta-arch.
+        height, width = semseg.shape[:2]
+        instances_list = []
+        for class_id in dataset_dict["unique_categories"]:
+            mask = semseg == class_id
+            if not np.any(mask):
+                continue
+            inst = Instances((height, width))
+            inst.gt_classes = torch.as_tensor([class_id], dtype=torch.int64)
+            inst.gt_masks = BitMasks(torch.from_numpy(mask[None, ...].astype("bool")))
+            inst.gt_boxes = inst.gt_masks.get_bounding_boxes()
+            instances_list.append(inst)
+
+        # Even if no valid masks are found (rare), provide an empty list so
+        # that downstream code finds an "instances" key instead of failing
+        # with a KeyError.
+        dataset_dict["instances"] = instances_list
 
         return dataset_dict
 
