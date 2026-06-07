@@ -41,6 +41,8 @@ VISION_PRETRAINED=${VISION_PRETRAINED:-checkpoints/sam2_hiera_large.pt}
 OUTPUT_DIR=${OUTPUT_DIR:-./output_suim_semseg_eval}
 RUN_IDX=${RUN_IDX:-0}
 RUN_MODE=${RUN_MODE:-eval}
+USE_TTA=${USE_TTA:-0}
+TTA_METHOD=${TTA_METHOD:-source}
 
 # ---------------------------------------------------------------------------
 # Core training schedule (matches Base-COCO / Open-World-SAM2 configs)

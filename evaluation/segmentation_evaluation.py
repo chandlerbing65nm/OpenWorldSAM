@@ -137,16 +137,20 @@ class SemSegEvaluator(DatasetEvaluator):
         for input, output in zip(inputs, outputs):
             output = output["sem_seg"].argmax(dim=0).to(self._cpu_device)
             pred = np.array(output, dtype=np.int64)
-            
-            with PathManager.open(self.input_file_to_gt_file[input["file_name"]], "rb") as f:
-                gt = load_semseg(f, self._semseg_loader) - self._class_offset
+            gt_from_input = "semseg" in input
 
-            if self._suim_rgb_mask:
+            if gt_from_input:
+                gt = np.array(input["semseg"].to(self._cpu_device), dtype=np.int64)
+            else:
+                with PathManager.open(self.input_file_to_gt_file[input["file_name"]], "rb") as f:
+                    gt = load_semseg(f, self._semseg_loader) - self._class_offset
+
+            if self._suim_rgb_mask and not gt_from_input:
                 if self._suim_color_to_class_id is not None:
                     gt = decode_rgb_semantic_mask_with_mapping(gt, self._suim_color_to_class_id, self._num_classes)
                 else:
                     gt = decode_rgb_semantic_mask(gt, self._stuff_colors, self._num_classes)
-            if self._dutuseg_rgb_mask:
+            if self._dutuseg_rgb_mask and not gt_from_input:
                 gt = decode_rgb_semantic_mask(gt, self._stuff_colors, self._num_classes)
             if self._coralscapes_label_shift:
                 gt = gt.copy().astype(np.int64)

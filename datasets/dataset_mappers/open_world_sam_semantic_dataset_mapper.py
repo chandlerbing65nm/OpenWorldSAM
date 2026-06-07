@@ -232,11 +232,18 @@ class OpenWorldSAM2SemanticDatasetMapper:
         dataset_dict["image"] = sam_preprocess(image)
         dataset_dict["evf_image"] = beit3_preprocess(image)
         dataset_dict["padding_mask"] = torch.as_tensor(np.ascontiguousarray(padding_mask))
+        dataset_dict["height"] = 1024
+        dataset_dict["width"] = 1024
 
         # read sem seg file
         gt_filename = dataset_dict["sem_seg_file_name"]
         semseg = load_image_into_numpy_array(gt_filename, dtype=int)
         semseg = normalize_semantic_mask(semseg, self.metadata, self.ignore_label)
+        semseg = F.interpolate(
+            torch.from_numpy(semseg.astype(np.float32)).unsqueeze(0).unsqueeze(0),
+            size=(1024, 1024),
+            mode="nearest",
+        ).squeeze(0).squeeze(0).to(torch.int32).numpy()
         dataset_dict['semseg'] = torch.from_numpy(semseg.astype(np.int32))
 
         # get unique ids
