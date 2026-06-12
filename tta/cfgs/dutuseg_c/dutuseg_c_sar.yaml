@@ -1,0 +1,38 @@
+_BASE_: "../../../configs/pascal/semantic-segmentation/Open-World-SAM2-CrossAttention.yaml"
+
+DATASETS:
+  TRAIN: ["dutuseg_sem_seg_train"]
+  TEST: ["dutuseg_sem_seg_val"]
+MODEL:
+  WEIGHTS: "/flash/project_465002853/projects/openworldsam/checkpoints/dutuseg_model_final.pth"
+  OpenWorldSAM2:
+    TEST:
+      SEMANTIC_ON: True
+      INSTANCE_ON: False
+      PANOPTIC_ON: False
+TTA:
+  ENABLED: True
+  METHOD: "sar"
+  DATASET: "dutuseg_c_sem_seg"
+  DATA_ROOT: "/scratch/project_465002853/datasets/dut-useg/DUT-USEG-C"
+  DOMAIN_ROOT: "/scratch/project_465002853/datasets/dut-useg/DUT-USEG-C/domains"
+  MASK_ROOT: "/scratch/project_465002853/datasets/dut-useg/DUT-USEG-C/masks"
+  INIT_WEIGHTS: "/flash/project_465002853/projects/openworldsam/checkpoints/dutuseg_model_final.pth"
+  CORRUPTIONS: ["gaussian_noise", "shot_noise", "impulse_noise", "defocus_blur", "motion_blur", "fog", "brightness", "contrast", "pixelate", "jpeg_compression"]
+  SEVERITIES: [5]
+  NUM_WORKERS: 4
+  SAR:
+    MARGIN_E0: 0.4
+    RESET_CONSTANT_EM: 0.2
+    RHO: 0.05
+    ADAPTIVE: False
+  OPTIM:
+    METHOD: "SGD"
+    LR: 1e-4
+    STEPS: 1
+    WD: 0.0
+    MOMENTUM: 0.9
+    DAMPENING: 0.0
+    NESTEROV: False
+
+VERSION: 2

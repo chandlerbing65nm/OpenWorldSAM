@@ -319,6 +319,7 @@ def setup(args):
     add_open_world_sam2_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
+    cfg.SEED = args.seed
     cfg.OUTPUT_DIR = os.path.join(cfg.OUTPUT_DIR, f"run_{args.run_idx}")
     cfg.SOLVER.IMS_PER_BATCH = args.batch_size
     cfg.SOLVER.BASE_LR = args.lr
@@ -340,7 +341,7 @@ def set_seed(seed=42):
     torch.backends.cudnn.benchmark = False
 
 def main(args):
-    set_seed()
+    set_seed(args.seed)
     cfg = setup(args)
     # print("Command cfg:", cfg)
 
@@ -366,6 +367,7 @@ if __name__ == "__main__":
     parser = default_argument_parser()
     parser.add_argument('--run_idx', default=0, type=int, metavar='N',
                         help='index of the experiment')
+    parser.add_argument('--seed', default=42, type=int)
     parser.add_argument('-b', '--batch_size', default=8, type=int, metavar='N',
                         help='mini-batch size (default: 256), this is the total '
                              'batch size of all GPUs on the current node when '

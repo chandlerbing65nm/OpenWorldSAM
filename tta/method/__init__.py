@@ -1,10 +1,16 @@
 from .source import Source
 from .cotta import CoTTA
+from .deyo import DeYO
+from .rdumb import RDumb
+from .sar import SAR
 from .tent import Tent
 
 
 _METHODS = {
     "cotta": CoTTA,
+    "deyo": DeYO,
+    "rdumb": RDumb,
+    "sar": SAR,
     "source": Source,
     "tent": Tent,
 }

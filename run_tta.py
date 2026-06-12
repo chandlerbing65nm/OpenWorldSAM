@@ -24,6 +24,7 @@ def setup(args):
     add_tta_config(cfg)
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
+    cfg.SEED = args.seed
     cfg.TTA.ENABLED = True
     if args.tta_method:
         cfg.TTA.METHOD = args.tta_method.lower()
@@ -48,7 +49,7 @@ def set_seed(seed=42):
 
 
 def main(args):
-    set_seed()
+    set_seed(args.seed)
     cfg = setup(args)
     model = build_model(cfg)
     return run_tta(cfg, model)
@@ -56,8 +57,9 @@ def main(args):
 
 if __name__ == "__main__":
     parser = default_argument_parser()
-    parser.add_argument("--run_idx", default=0, type=int, metavar="N")
+    parser.add_argument("--run_idx", default="0", type=str)
     parser.add_argument("--tta_method", default="source", type=str)
+    parser.add_argument("--seed", default=42, type=int)
     args = parser.parse_args()
     launch(
         main,
