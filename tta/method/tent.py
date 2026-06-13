@@ -12,6 +12,9 @@ def pixelwise_softmax_entropy(score_map: torch.Tensor) -> torch.Tensor:
 
 
 class Tent(SegTTAMethod):
+    def _is_adaptable_norm_module(self, module):
+        return isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.LayerNorm, nn.GroupNorm, LayerNorm2d))
+
     def _use_selected_module_adaptation(self):
         return any(
             bool(getattr(self.cfg.TTA.ADAPT, name))
@@ -26,7 +29,6 @@ class Tent(SegTTAMethod):
 
     def _selected_modules_and_params(self):
         modules = []
-        params = []
         adapt_cfg = self.cfg.TTA.ADAPT
 
         if bool(adapt_cfg.SAM_VISUAL_ENCODER) and hasattr(self.model.visual_model, "image_encoder"):
@@ -46,10 +48,32 @@ class Tent(SegTTAMethod):
                 modules.append(("text_hidden_fcs", self.model.text_hidden_fcs))
             if hasattr(self.model, "cross_attention_transformer"):
                 modules.append(("cross_attention_transformer", self.model.cross_attention_transformer))
-            if hasattr(self.model, "positional_tokens"):
-                params.append(("positional_tokens", self.model.positional_tokens))
 
-        return modules, params
+        return modules
+
+    def _enable_norm_adaptation(self, module):
+        for submodule in module.modules():
+            if not self._is_adaptable_norm_module(submodule):
+                continue
+            for param_name, param in submodule.named_parameters(recurse=False):
+                if param_name in {"weight", "bias"}:
+                    param.requires_grad_(True)
+            self._configure_bn_for_adaptation(submodule)
+
+    def _collect_norm_params_from_module(self, module_name, module, seen):
+        params = []
+        names = []
+        for submodule_name, submodule in module.named_modules():
+            if not self._is_adaptable_norm_module(submodule):
+                continue
+            full_module_name = f"{module_name}.{submodule_name}" if submodule_name else module_name
+            for param_name, param in submodule.named_parameters(recurse=False):
+                if param_name not in {"weight", "bias"} or not param.requires_grad or id(param) in seen:
+                    continue
+                params.append(param)
+                names.append(f"{full_module_name}.{param_name}" if full_module_name else param_name)
+                seen.add(id(param))
+        return params, names
 
     def _configure_bn_for_adaptation(self, module):
         for submodule in module.modules():
@@ -66,13 +90,9 @@ class Tent(SegTTAMethod):
         self.model.requires_grad_(False)
 
         if self._use_selected_module_adaptation():
-            modules, params = self._selected_modules_and_params()
+            modules = self._selected_modules_and_params()
             for _, module in modules:
-                for param in module.parameters():
-                    param.requires_grad_(True)
-                self._configure_bn_for_adaptation(module)
-            for _, param in params:
-                param.requires_grad_(True)
+                self._enable_norm_adaptation(module)
             return
 
         for module in self.model.modules():
@@ -93,22 +113,12 @@ class Tent(SegTTAMethod):
             params = []
             names = []
             seen = set()
-            modules, standalone_params = self._selected_modules_and_params()
+            modules = self._selected_modules_and_params()
 
             for module_name, module in modules:
-                for param_name, param in module.named_parameters():
-                    if not param.requires_grad or id(param) in seen:
-                        continue
-                    params.append(param)
-                    names.append(f"{module_name}.{param_name}" if param_name else module_name)
-                    seen.add(id(param))
-
-            for param_name, param in standalone_params:
-                if not param.requires_grad or id(param) in seen:
-                    continue
-                params.append(param)
-                names.append(param_name)
-                seen.add(id(param))
+                module_params, module_names = self._collect_norm_params_from_module(module_name, module, seen)
+                params.extend(module_params)
+                names.extend(module_names)
 
             return params, names
 

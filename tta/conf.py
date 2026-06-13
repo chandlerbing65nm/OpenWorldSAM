@@ -51,6 +51,13 @@ def add_tta_config(cfg):
     cfg.TTA.COTTA.STUDENT_CROPS = 2
     cfg.TTA.COTTA.STUDENT_CROP_SCALE = 0.5
 
+    cfg.TTA.GTTA = CN()
+    cfg.TTA.GTTA.SOURCE_DATASET = ""
+    cfg.TTA.GTTA.SOURCE_BATCH_SIZE = 1
+    cfg.TTA.GTTA.LAMBDA_CE_TRG = 0.1
+    cfg.TTA.GTTA.PSEUDO_MOMENTUM = 0.9
+    cfg.TTA.GTTA.USE_STYLE_TRANSFER = False
+
     cfg.TTA.SAR = CN()
     cfg.TTA.SAR.MARGIN_E0 = 0.4
     cfg.TTA.SAR.RESET_CONSTANT_EM = 0.2
@@ -74,6 +81,39 @@ def add_tta_config(cfg):
     cfg.TTA.DEYO.ROW_START = 0
     cfg.TTA.DEYO.COLUMN_START = 0
     cfg.TTA.DEYO.PATCH_LEN = 4
+
+    cfg.TTA.EATA = CN()
+    cfg.TTA.EATA.MARGIN_E0 = 0.4
+    cfg.TTA.EATA.D_MARGIN = 0.05
+    cfg.TTA.EATA.FISHER_ALPHA = 0.0
+    cfg.TTA.EATA.NUM_SAMPLES = 0
+    cfg.TTA.EATA.SOURCE_DATASET = ""
+    cfg.TTA.EATA.FISHER_BATCH_SIZE = 1
+    cfg.TTA.EATA.RESET_AFTER_NUM_UPDATES = 0
+
+    cfg.TTA.ROID = CN()
+    cfg.TTA.ROID.USE_WEIGHTING = True
+    cfg.TTA.ROID.USE_PRIOR_CORRECTION = True
+    cfg.TTA.ROID.USE_CONSISTENCY = True
+    cfg.TTA.ROID.MOMENTUM_SRC = 0.999
+    cfg.TTA.ROID.MOMENTUM_PROBS = 0.9
+    cfg.TTA.ROID.TEMPERATURE = 1.0
+
+    cfg.TTA.M2A = CN()
+    cfg.TTA.M2A.M = 0.1
+    cfg.TTA.M2A.N = 3
+    cfg.TTA.M2A.LAMBDA_ERL = 1.0
+    cfg.TTA.M2A.LAMBDA_EML = 1.0
+    cfg.TTA.M2A.MARGIN = 0.0
+    cfg.TTA.M2A.RANDOM_MASKING = "spatial"
+    cfg.TTA.M2A.NUM_SQUARES = 1
+    cfg.TTA.M2A.MASK_TYPE = "binary"
+    cfg.TTA.M2A.SPATIAL_TYPE = "patch"
+    cfg.TTA.M2A.SPECTRAL_TYPE = "all"
+    cfg.TTA.M2A.SEED = 1
+    cfg.TTA.M2A.DISABLE_MCL = False
+    cfg.TTA.M2A.DISABLE_ERL = True
+    cfg.TTA.M2A.DISABLE_EML = False
 
     cfg.TTA.OPTIM = CN()
     cfg.TTA.OPTIM.STEPS = 1
