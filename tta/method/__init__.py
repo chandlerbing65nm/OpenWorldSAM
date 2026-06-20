@@ -2,11 +2,15 @@ from .source import Source
 from .cotta import CoTTA
 from .deyo import DeYO
 from .eata import EATA
-from .gtta import GTTA
+from .lame import LAME
 from .m2a import M2A
+from .memo import MEMO
+from .rpl import RPL
 from .rdumb import RDumb
 from .roid import ROID
+from .santa import SANTA
 from .sar import SAR
+from .smppm import SMPPM
 from .tent import Tent
 
 
@@ -14,11 +18,15 @@ _METHODS = {
     "cotta": CoTTA,
     "deyo": DeYO,
     "eata": EATA,
-    "gtta": GTTA,
+    "lame": LAME,
     "m2a": M2A,
+    "memo": MEMO,
+    "rpl": RPL,
     "rdumb": RDumb,
     "roid": ROID,
+    "santa": SANTA,
     "sar": SAR,
+    "sm_ppm": SMPPM,
     "source": Source,
     "tent": Tent,
 }

@@ -32,7 +32,9 @@ def add_tta_config(cfg):
     cfg.TTA.SEVERITIES = list(DEFAULT_SUIM_C_SEVERITIES)
     cfg.TTA.NUM_WORKERS = 4
     cfg.TTA.BATCH_SIZE = 1
+    cfg.TTA.USE_CLEAN_DATA = False
     cfg.TTA.TTA_MODE = "normal_tta"
+    cfg.TTA.TTA_ROUNDS = 10
     cfg.TTA.EPISODIC = False
     cfg.TTA.INIT_WEIGHTS = DEFAULT_SUIM_C_WEIGHTS
 
@@ -42,6 +44,7 @@ def add_tta_config(cfg):
     cfg.TTA.ADAPT.SAM_PROMPT_ENCODER = False
     cfg.TTA.ADAPT.VLM_ENCODER = False
     cfg.TTA.ADAPT.SOFT_PROMPTING_TRANSFORMER = False
+    cfg.TTA.ADAPT.FULL_TRAINABLE_EXCEPT_EXCLUDED = False
 
     cfg.TTA.COTTA = CN()
     cfg.TTA.COTTA.N_AUGMENTATIONS = 6
@@ -51,12 +54,34 @@ def add_tta_config(cfg):
     cfg.TTA.COTTA.STUDENT_CROPS = 2
     cfg.TTA.COTTA.STUDENT_CROP_SCALE = 0.5
 
-    cfg.TTA.GTTA = CN()
-    cfg.TTA.GTTA.SOURCE_DATASET = ""
-    cfg.TTA.GTTA.SOURCE_BATCH_SIZE = 1
-    cfg.TTA.GTTA.LAMBDA_CE_TRG = 0.1
-    cfg.TTA.GTTA.PSEUDO_MOMENTUM = 0.9
-    cfg.TTA.GTTA.USE_STYLE_TRANSFER = False
+    cfg.TTA.MEMO = CN()
+    cfg.TTA.MEMO.N_AUGMENTATIONS = 6
+    cfg.TTA.MEMO.AUG_BATCH_SIZE = 2
+    cfg.TTA.MEMO.BN_ALPHA = 0.1
+
+    cfg.TTA.LAME = CN()
+    cfg.TTA.LAME.AFFINITY = "rbf"
+    cfg.TTA.LAME.KNN = 5
+    cfg.TTA.LAME.SIGMA = 1.0
+    cfg.TTA.LAME.FORCE_SYMMETRY = False
+    cfg.TTA.LAME.BOUND_LAMBDA = 1.0
+    cfg.TTA.LAME.MAX_STEPS = 100
+
+    cfg.TTA.SANTA = CN()
+    cfg.TTA.SANTA.LAMBDA_CE_TRG = 1.0
+    cfg.TTA.SANTA.LAMBDA_CONT = 1.0
+    cfg.TTA.SANTA.TEMPERATURE = 0.1
+    cfg.TTA.SANTA.PROJECTION_DIM = 128
+    cfg.TTA.SANTA.CONTRAST_MODE = "all"
+    cfg.TTA.SANTA.AUG_ALPHA = 0.5
+    cfg.TTA.SANTA.SOURCE_DATASET = ""
+    cfg.TTA.SANTA.SOURCE_BATCH_SIZE = 1
+    cfg.TTA.SANTA.PROTOTYPE_MAX_SAMPLES = 0
+    cfg.TTA.SANTA.AUG_CROP_MIN = 0.3
+    cfg.TTA.SANTA.AUG_CROP_MAX = 1.0
+
+    cfg.TTA.RPL = CN()
+    cfg.TTA.RPL.Q = 0.8
 
     cfg.TTA.SAR = CN()
     cfg.TTA.SAR.MARGIN_E0 = 0.4
@@ -114,6 +139,11 @@ def add_tta_config(cfg):
     cfg.TTA.M2A.DISABLE_MCL = False
     cfg.TTA.M2A.DISABLE_ERL = True
     cfg.TTA.M2A.DISABLE_EML = False
+
+    cfg.TTA.SMPPM = CN()
+    cfg.TTA.SMPPM.SOURCE_DATASET = ""
+    cfg.TTA.SMPPM.SOURCE_BATCH_SIZE = 1
+    cfg.TTA.SMPPM.PROTOTYPE_GRID_SIZE = 8
 
     cfg.TTA.OPTIM = CN()
     cfg.TTA.OPTIM.STEPS = 1

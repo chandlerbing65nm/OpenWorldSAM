@@ -191,6 +191,9 @@ class M2A(Tent):
             self._rng.manual_seed(seed)
 
     def collect_params(self):
+        if self._use_full_trainable_except_excluded():
+            return self._collect_all_trainable_params()
+
         params = []
         names = []
         for module_name, module in self.model.named_modules():
@@ -227,21 +230,7 @@ class M2A(Tent):
             evf_images = torch.stack([sample["evf_image"].float() for sample in batched_inputs], dim=0)
 
         outputs0 = self.model(batched_inputs)
-        logits0 = torch.stack([output["sem_seg"].float() for output in outputs0], dim=0)
-        teacher_logits = [logits0.detach()]
-
-        mcl_loss = None
-        erl_loss = None
-        eml_sum = None
-        entropy_history = []
-
-        entropy0 = None
-        if not self.disable_erl or not self.disable_eml:
-            entropy0 = self.entropy(logits0)
-        if not self.disable_erl and entropy0 is not None:
-            entropy_history.append(entropy0)
-        if not self.disable_eml and entropy0 is not None:
-            eml_sum = entropy0.mean()
+        outputs_list = [torch.stack([output["sem_seg"].float() for output in outputs0], dim=0)]
 
         b, _, h, w = images.shape
         for m_val in self.mn[1:]:
@@ -257,40 +246,34 @@ class M2A(Tent):
                     masked_sample["evf_image"] = evf_xb[idx].to(sample["evf_image"].dtype)
                 masked_inputs.append(masked_sample)
             out_m = self.model(masked_inputs)
-            logits_m = torch.stack([output["sem_seg"].float() for output in out_m], dim=0)
-
-            if not self.disable_mcl:
-                mcl_term = softmax_entropy_seg(logits_m, teacher_logits[0]).mean()
-                for prev_teacher in teacher_logits[1:]:
-                    mcl_term = mcl_term + softmax_entropy_seg(logits_m, prev_teacher).mean()
-                mcl_loss = mcl_term if mcl_loss is None else mcl_loss + mcl_term
-
-            entropy_m = None
-            if not self.disable_erl or not self.disable_eml:
-                entropy_m = self.entropy(logits_m)
-
-            if not self.disable_erl and entropy_m is not None:
-                for prev_entropy in entropy_history:
-                    erl_term = F.relu(prev_entropy - entropy_m.detach() + self.margin).mean()
-                    erl_loss = erl_term if erl_loss is None else erl_loss + erl_term
-                entropy_history.append(entropy_m)
-
-            if not self.disable_eml and entropy_m is not None:
-                eml_term = entropy_m.mean()
-                eml_sum = eml_term if eml_sum is None else eml_sum + eml_term
-
-            teacher_logits.append(logits_m.detach())
+            outputs_list.append(torch.stack([output["sem_seg"].float() for output in out_m], dim=0))
 
         total_loss_terms = []
 
-        if mcl_loss is not None and mcl_loss.requires_grad:
-            total_loss_terms.append(mcl_loss)
+        if not self.disable_mcl:
+            mcl = 0.0
+            for i in range(1, len(self.mn)):
+                mcl = mcl + softmax_entropy_seg(outputs_list[i], outputs_list[0].detach()).mean()
+                for j in range(1, i):
+                    mcl = mcl + softmax_entropy_seg(outputs_list[i], outputs_list[j].detach()).mean()
+            if isinstance(mcl, torch.Tensor) and mcl.requires_grad:
+                total_loss_terms.append(mcl)
 
-        if erl_loss is not None and erl_loss.requires_grad:
-            total_loss_terms.append(self.lambda_erl * erl_loss)
+        if not self.disable_erl:
+            entropies = [self.entropy(out) for out in outputs_list]
+            erl_tmp = 0.0
+            for i in range(len(self.mn)):
+                for j in range(i + 1, len(self.mn)):
+                    erl_tmp = erl_tmp + F.relu(entropies[i] - entropies[j].detach() + self.margin).mean()
+            if isinstance(erl_tmp, torch.Tensor) and erl_tmp.requires_grad:
+                total_loss_terms.append(self.lambda_erl * erl_tmp)
 
-        if eml_sum is not None and eml_sum.requires_grad:
-            total_loss_terms.append(self.lambda_eml * (eml_sum / float(len(self.mn))))
+        if not self.disable_eml:
+            eml_terms = [self.entropy(out).mean() for out in outputs_list]
+            if len(eml_terms) > 0:
+                eml = sum(eml_terms) / float(len(eml_terms))
+                if isinstance(eml, torch.Tensor) and eml.requires_grad:
+                    total_loss_terms.append(self.lambda_eml * eml)
 
         if len(total_loss_terms) > 0:
             loss = total_loss_terms[0]

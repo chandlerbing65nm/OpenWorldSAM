@@ -15,6 +15,45 @@ class Tent(SegTTAMethod):
     def _is_adaptable_norm_module(self, module):
         return isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.LayerNorm, nn.GroupNorm, LayerNorm2d))
 
+    def _use_full_trainable_except_excluded(self):
+        return bool(getattr(self.cfg.TTA.ADAPT, "FULL_TRAINABLE_EXCEPT_EXCLUDED", False))
+
+    def _frozen_parameter_prefixes(self):
+        return (
+            "mm_extractor.",
+            "visual_model.image_encoder.",
+            "visual_model.sam_prompt_encoder.",
+            "visual_model.sam_mask_decoder.",
+        )
+
+    def _is_excluded_parameter(self, name):
+        return name in {"mm_extractor", "visual_model.image_encoder", "visual_model.sam_prompt_encoder", "visual_model.sam_mask_decoder"} or name.startswith(self._frozen_parameter_prefixes())
+
+    def _enable_full_trainable_except_excluded(self):
+        for name, param in self.model.named_parameters():
+            if self._is_excluded_parameter(name):
+                param.requires_grad_(False)
+            else:
+                param.requires_grad_(True)
+
+        for module_name, module in self.model.named_modules():
+            if self._is_excluded_parameter(module_name):
+                continue
+            if self._is_adaptable_norm_module(module):
+                self._configure_bn_for_adaptation(module)
+
+    def _collect_all_trainable_params(self):
+        params = []
+        names = []
+        seen = set()
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad or id(param) in seen:
+                continue
+            params.append(param)
+            names.append(name)
+            seen.add(id(param))
+        return params, names
+
     def _use_selected_module_adaptation(self):
         return any(
             bool(getattr(self.cfg.TTA.ADAPT, name))
@@ -89,6 +128,10 @@ class Tent(SegTTAMethod):
         self.model.eval()
         self.model.requires_grad_(False)
 
+        if self._use_full_trainable_except_excluded():
+            self._enable_full_trainable_except_excluded()
+            return
+
         if self._use_selected_module_adaptation():
             modules = self._selected_modules_and_params()
             for _, module in modules:
@@ -109,6 +152,9 @@ class Tent(SegTTAMethod):
                 module.requires_grad_(True)
 
     def collect_params(self):
+        if self._use_full_trainable_except_excluded():
+            return self._collect_all_trainable_params()
+
         if self._use_selected_module_adaptation():
             params = []
             names = []

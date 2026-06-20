@@ -2,6 +2,7 @@ import copy
 import json
 import logging
 import os
+import random
 
 import numpy as np
 from detectron2.checkpoint import DetectionCheckpointer
@@ -10,9 +11,9 @@ from detectron2.data import DatasetCatalog, MetadataCatalog, build_detection_tes
 from datasets import OpenWorldSAM2SemanticDatasetMapper
 from datasets.datasets.register_dutuseg_semseg import _get_dutuseg_sem_seg_meta
 from datasets.datasets.register_suim_semseg import _get_suim_sem_seg_meta
-from evaluation import SemSegEvaluator
 from tta.conf import get_tta_init_weights
 from tta.method import build_tta_method
+from tta.sem_seg_tta_evaluator import TTASemSegEvaluator
 
 logger = logging.getLogger("open-world-sam2-tta")
 
@@ -111,6 +112,30 @@ def build_tta_loader(cfg, dataset_name):
     )
 
 
+def use_clean_tta_data(cfg):
+    return bool(getattr(cfg.TTA, "USE_CLEAN_DATA", False))
+
+
+def get_clean_tta_dataset_name(cfg):
+    dataset_key = str(getattr(cfg.TTA, "DATASET", "")).lower()
+    dataset_name_map = {
+        "suim_c_sem_seg": "suim_sem_seg_val",
+        "suim_sem_seg": "suim_sem_seg_val",
+        "suim_sem_seg_val": "suim_sem_seg_val",
+        "dutuseg_c_sem_seg": "dutuseg_sem_seg_val",
+        "dutuseg_sem_seg": "dutuseg_sem_seg_val",
+        "dutuseg_sem_seg_val": "dutuseg_sem_seg_val",
+    }
+    if dataset_key in dataset_name_map:
+        return dataset_name_map[dataset_key]
+
+    dataset_candidates = list(getattr(cfg.DATASETS, "TEST", ()))
+    if dataset_candidates:
+        return str(dataset_candidates[0])
+
+    raise ValueError(f"Unable to resolve clean TTA dataset for TTA.DATASET={cfg.TTA.DATASET}")
+
+
 def evaluate_loader(model, data_loader, evaluator):
     evaluator.reset()
     for inputs in data_loader:
@@ -122,10 +147,48 @@ def evaluate_loader(model, data_loader, evaluator):
 def _format_sem_seg_metrics(results):
     sem_seg = results.get("sem_seg", {}) if isinstance(results, dict) else {}
     metrics = []
-    for metric_name in ("mIoU", "fwIoU", "mACC", "pACC"):
+    for metric_name in ("mIoU", "fwIoU", "mDice", "BoundaryF1", "TrimapIoU", "mACC", "pACC", "ECE", "BrierScore"):
         if metric_name in sem_seg:
             metrics.append(f"{metric_name}={float(sem_seg[metric_name]):.4f}")
     return " ".join(metrics)
+
+
+def _evaluate_domain(cfg, base_model, corruption, severity, tta_mode, output_dir_suffix=None):
+    dataset_name = register_tta_dataset(cfg, corruption, severity)
+    data_loader = build_tta_loader(cfg, dataset_name)
+    output_dir_parts = [
+        cfg.OUTPUT_DIR,
+        "tta",
+        str(cfg.TTA.METHOD).lower(),
+    ]
+    if output_dir_suffix is not None:
+        output_dir_parts.append(output_dir_suffix)
+    output_dir_parts.extend([corruption, str(severity)])
+    output_dir = os.path.join(*output_dir_parts)
+    evaluator = TTASemSegEvaluator(dataset_name, distributed=False, output_dir=output_dir)
+
+    base_model.metadata = MetadataCatalog.get(dataset_name)
+    adapt_model = build_tta_method(cfg, base_model)
+    return evaluate_loader(adapt_model, data_loader, evaluator)
+
+
+def _evaluate_clean_dataset(cfg, base_model, output_dir_suffix=None):
+    dataset_name = get_clean_tta_dataset_name(cfg)
+    data_loader = build_tta_loader(cfg, dataset_name)
+    output_dir_parts = [
+        cfg.OUTPUT_DIR,
+        "tta",
+        str(cfg.TTA.METHOD).lower(),
+    ]
+    if output_dir_suffix is not None:
+        output_dir_parts.append(output_dir_suffix)
+    output_dir_parts.append("clean")
+    output_dir = os.path.join(*output_dir_parts)
+    evaluator = TTASemSegEvaluator(dataset_name, distributed=False, output_dir=output_dir)
+
+    base_model.metadata = MetadataCatalog.get(dataset_name)
+    adapt_model = build_tta_method(cfg, base_model)
+    return evaluate_loader(adapt_model, data_loader, evaluator)
 
 
 def run_tta(cfg, base_model):
@@ -133,63 +196,147 @@ def run_tta(cfg, base_model):
     DetectionCheckpointer(base_model).resume_or_load(weights_path, resume=False)
     source_state = copy.deepcopy(base_model.state_dict())
     tta_mode = str(cfg.TTA.TTA_MODE).lower()
-    if tta_mode not in {"normal_tta", "cont_tta"}:
+    if tta_mode not in {"normal_tta", "cont_tta", "lifelong_rand_cont_tta"}:
         raise ValueError(f"Unsupported TTA mode: {cfg.TTA.TTA_MODE}")
 
     all_results = {}
     summary_scores = []
 
-    for corruption in cfg.TTA.CORRUPTIONS:
-        corruption_scores = []
-        for severity in cfg.TTA.SEVERITIES:
-            dataset_name = register_tta_dataset(cfg, corruption, severity)
-            data_loader = build_tta_loader(cfg, dataset_name)
-            output_dir = os.path.join(
-                cfg.OUTPUT_DIR,
-                "tta",
-                str(cfg.TTA.METHOD).lower(),
-                corruption,
-                str(severity),
-            )
-            evaluator = SemSegEvaluator(dataset_name, distributed=False, output_dir=output_dir)
+    def _mean_metric(metric_name):
+        values = []
+        for result in all_results.values():
+            if not isinstance(result, dict):
+                continue
+            sem_seg = result.get("sem_seg", {})
+            if metric_name in sem_seg:
+                values.append(float(sem_seg[metric_name]))
+        return float(np.mean(values)) if values else 0.0
 
-            if tta_mode == "normal_tta":
-                base_model.load_state_dict(source_state, strict=True)
-            base_model.metadata = MetadataCatalog.get(dataset_name)
-            adapt_model = build_tta_method(cfg, base_model)
-            results = evaluate_loader(adapt_model, data_loader, evaluator)
+    if use_clean_tta_data(cfg):
+        if tta_mode == "normal_tta":
+            base_model.load_state_dict(source_state, strict=True)
 
-            key = f"{corruption}/severity_{severity}"
-            all_results[key] = results
-            miou = float(results["sem_seg"]["mIoU"])
-            metrics_str = _format_sem_seg_metrics(results)
-            corruption_scores.append(miou)
-            summary_scores.append(miou)
+        results = _evaluate_clean_dataset(cfg, base_model)
+        all_results["clean"] = results
+        miou = float(results["sem_seg"]["mIoU"])
+        metrics_str = _format_sem_seg_metrics(results)
+        summary_scores.append(miou)
+        logger.info(
+            "[TTA][CLEAN] mode=%s method=%s dataset=%s %s",
+            tta_mode,
+            cfg.TTA.METHOD,
+            get_clean_tta_dataset_name(cfg),
+            metrics_str,
+        )
+    elif tta_mode == "lifelong_rand_cont_tta":
+        corruption_list = list(cfg.TTA.CORRUPTIONS)
+        num_rounds = max(1, int(cfg.TTA.TTA_ROUNDS))
+        rng = random.Random(int(getattr(cfg, "SEED", 0)))
+        round_corruption_scores = {}
+
+        for round_idx in range(num_rounds):
+            round_corruptions = list(corruption_list)
+            rng.shuffle(round_corruptions)
             logger.info(
-                "[TTA][DOMAIN] mode=%s method=%s domain=%s severity=%s %s",
+                "[TTA][ROUND] mode=%s method=%s round=%d corruption_order=%s",
                 tta_mode,
                 cfg.TTA.METHOD,
-                corruption,
-                severity,
-                metrics_str,
+                round_idx + 1,
+                round_corruptions,
             )
 
-        if corruption_scores:
-            corruption_mean_miou = float(np.mean(corruption_scores))
-            all_results[f"{corruption}/mean_mIoU"] = corruption_mean_miou
-            logger.info(
-                "[TTA][CORRUPTION] mode=%s method=%s corruption=%s mean_mIoU=%.4f",
-                tta_mode,
-                cfg.TTA.METHOD,
-                corruption,
-                corruption_mean_miou,
-            )
+            for corruption in round_corruptions:
+                round_key = f"round_{round_idx + 1}/{corruption}"
+                corruption_scores = []
+                for severity in cfg.TTA.SEVERITIES:
+                    results = _evaluate_domain(
+                        cfg,
+                        base_model,
+                        corruption,
+                        severity,
+                        tta_mode,
+                        output_dir_suffix=f"round_{round_idx + 1}",
+                    )
+
+                    key = f"{round_key}/severity_{severity}"
+                    all_results[key] = results
+                    miou = float(results["sem_seg"]["mIoU"])
+                    metrics_str = _format_sem_seg_metrics(results)
+                    corruption_scores.append(miou)
+                    summary_scores.append(miou)
+                    logger.info(
+                        "[TTA][DOMAIN] mode=%s method=%s round=%d domain=%s severity=%s %s",
+                        tta_mode,
+                        cfg.TTA.METHOD,
+                        round_idx + 1,
+                        corruption,
+                        severity,
+                        metrics_str,
+                    )
+
+                if corruption_scores:
+                    corruption_mean_miou = float(np.mean(corruption_scores))
+                    all_results[f"{round_key}/mean_mIoU"] = corruption_mean_miou
+                    round_corruption_scores.setdefault(corruption, []).append(corruption_mean_miou)
+                    logger.info(
+                        "[TTA][CORRUPTION] mode=%s method=%s round=%d corruption=%s mean_mIoU=%.4f",
+                        tta_mode,
+                        cfg.TTA.METHOD,
+                        round_idx + 1,
+                        corruption,
+                        corruption_mean_miou,
+                    )
+
+        for corruption, scores in round_corruption_scores.items():
+            if scores:
+                all_results[f"{corruption}/mean_mIoU_across_rounds"] = float(np.mean(scores))
+    else:
+        for corruption in cfg.TTA.CORRUPTIONS:
+            corruption_scores = []
+            for severity in cfg.TTA.SEVERITIES:
+                if tta_mode == "normal_tta":
+                    base_model.load_state_dict(source_state, strict=True)
+
+                results = _evaluate_domain(cfg, base_model, corruption, severity, tta_mode)
+
+                key = f"{corruption}/severity_{severity}"
+                all_results[key] = results
+                miou = float(results["sem_seg"]["mIoU"])
+                metrics_str = _format_sem_seg_metrics(results)
+                corruption_scores.append(miou)
+                summary_scores.append(miou)
+                logger.info(
+                    "[TTA][DOMAIN] mode=%s method=%s domain=%s severity=%s %s",
+                    tta_mode,
+                    cfg.TTA.METHOD,
+                    corruption,
+                    severity,
+                    metrics_str,
+                )
+
+            if corruption_scores:
+                corruption_mean_miou = float(np.mean(corruption_scores))
+                all_results[f"{corruption}/mean_mIoU"] = corruption_mean_miou
+                logger.info(
+                    "[TTA][CORRUPTION] mode=%s method=%s corruption=%s mean_mIoU=%.4f",
+                    tta_mode,
+                    cfg.TTA.METHOD,
+                    corruption,
+                    corruption_mean_miou,
+                )
 
     summary = {
         "tta_mode": tta_mode,
         "method": str(cfg.TTA.METHOD).lower(),
         "weights": weights_path,
         "mean_mIoU": float(np.mean(summary_scores)) if summary_scores else 0.0,
+        "mean_mDice": _mean_metric("mDice"),
+        "mean_BoundaryF1": _mean_metric("BoundaryF1"),
+        "mean_TrimapIoU": _mean_metric("TrimapIoU"),
+        "mean_mACC": _mean_metric("mACC"),
+        "mean_pACC": _mean_metric("pACC"),
+        "mean_ECE": _mean_metric("ECE"),
+        "mean_BrierScore": _mean_metric("BrierScore"),
         "results": all_results,
     }
 
@@ -199,10 +346,17 @@ def run_tta(cfg, base_model):
         json.dump(summary, handle, indent=2)
 
     logger.info(
-        "[TTA][SUMMARY] mode=%s method=%s mean_mIoU=%.4f",
+        "[TTA][SUMMARY] mode=%s method=%s mean_mIoU=%.4f mean_mDice=%.4f mean_BoundaryF1=%.4f mean_TrimapIoU=%.4f mean_mACC=%.4f mean_pACC=%.4f mean_ECE=%.4f mean_BrierScore=%.4f",
         tta_mode,
         cfg.TTA.METHOD,
         summary["mean_mIoU"],
+        summary["mean_mDice"],
+        summary["mean_BoundaryF1"],
+        summary["mean_TrimapIoU"],
+        summary["mean_mACC"],
+        summary["mean_pACC"],
+        summary["mean_ECE"],
+        summary["mean_BrierScore"],
     )
     logger.info("[TTA] summary saved to %s", summary_path)
     return summary

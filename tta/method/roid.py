@@ -164,11 +164,11 @@ class ROID(Tent):
             if self.use_weighting:
                 selected_indices = (~mask).nonzero(as_tuple=False).flatten().tolist()
                 selected_inputs = [batched_inputs[idx] for idx in selected_indices]
-                out_ref = sem_seg_batch[~mask].detach()
+                out_ref = sem_seg_batch[~mask]
                 w_sel = weights[~mask]
             else:
                 selected_inputs = batched_inputs
-                out_ref = sem_seg_batch.detach()
+                out_ref = sem_seg_batch
                 w_sel = None
 
             if len(selected_inputs) > 0:

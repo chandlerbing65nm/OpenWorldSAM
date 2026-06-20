@@ -375,6 +375,7 @@ class OpenWorldSAM2(nn.Module):
 
         if not self.training:
             processed_results = []
+            intermediate_results = [] if return_intermediate else None
 
         # Process each image batch
         for img_idx in range(batch_size):
@@ -512,6 +513,14 @@ class OpenWorldSAM2(nn.Module):
                 pred_masks = self.postprocess_masks(low_res_masks, orig_hw=original_size_list[img_idx])
 
                 processed_results.append({})
+                if return_intermediate:
+                    intermediate_results.append(
+                        {
+                            "image_embed": _features["image_embed"][img_idx],
+                            "low_res_masks": low_res_masks,
+                            "pred_logits": pred_logits,
+                        }
+                    )
 
                 if self.refer_on:
                     # Get referring expression masks
@@ -551,6 +560,8 @@ class OpenWorldSAM2(nn.Module):
                     sem_seg = self.semantic_inference(mask_cls, pred_masks, keep_sem_bgd=False)
                     processed_results[-1]["sem_seg"] = sem_seg
 
+                if return_intermediate:
+                    return processed_results, intermediate_results
                 return processed_results
 
             ################################# Calculate Losses #######################################
