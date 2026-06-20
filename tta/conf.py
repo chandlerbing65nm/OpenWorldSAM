@@ -33,6 +33,7 @@ def add_tta_config(cfg):
     cfg.TTA.NUM_WORKERS = 4
     cfg.TTA.BATCH_SIZE = 1
     cfg.TTA.USE_CLEAN_DATA = False
+    cfg.TTA.INCLUDE_CLEAN_AS_FIRST_DOMAIN = False
     cfg.TTA.TTA_MODE = "normal_tta"
     cfg.TTA.TTA_ROUNDS = 10
     cfg.TTA.EPISODIC = False

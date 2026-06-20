@@ -116,6 +116,10 @@ def use_clean_tta_data(cfg):
     return bool(getattr(cfg.TTA, "USE_CLEAN_DATA", False))
 
 
+def include_clean_as_first_domain(cfg):
+    return bool(getattr(cfg.TTA, "INCLUDE_CLEAN_AS_FIRST_DOMAIN", False))
+
+
 def get_clean_tta_dataset_name(cfg):
     dataset_key = str(getattr(cfg.TTA, "DATASET", "")).lower()
     dataset_name_map = {
@@ -201,6 +205,7 @@ def run_tta(cfg, base_model):
 
     all_results = {}
     summary_scores = []
+    prepend_clean = include_clean_as_first_domain(cfg) and not use_clean_tta_data(cfg)
 
     def _mean_metric(metric_name):
         values = []
@@ -211,6 +216,26 @@ def run_tta(cfg, base_model):
             if metric_name in sem_seg:
                 values.append(float(sem_seg[metric_name]))
         return float(np.mean(values)) if values else 0.0
+
+    def _run_clean_first_if_enabled(output_dir_suffix=None):
+        if not prepend_clean or "clean" in all_results:
+            return
+
+        if tta_mode == "normal_tta":
+            base_model.load_state_dict(source_state, strict=True)
+
+        results = _evaluate_clean_dataset(cfg, base_model, output_dir_suffix=output_dir_suffix)
+        all_results["clean"] = results
+        miou = float(results["sem_seg"]["mIoU"])
+        metrics_str = _format_sem_seg_metrics(results)
+        summary_scores.append(miou)
+        logger.info(
+            "[TTA][CLEAN-FIRST] mode=%s method=%s dataset=%s %s",
+            tta_mode,
+            cfg.TTA.METHOD,
+            get_clean_tta_dataset_name(cfg),
+            metrics_str,
+        )
 
     if use_clean_tta_data(cfg):
         if tta_mode == "normal_tta":
@@ -229,6 +254,7 @@ def run_tta(cfg, base_model):
             metrics_str,
         )
     elif tta_mode == "lifelong_rand_cont_tta":
+        _run_clean_first_if_enabled()
         corruption_list = list(cfg.TTA.CORRUPTIONS)
         num_rounds = max(1, int(cfg.TTA.TTA_ROUNDS))
         rng = random.Random(int(getattr(cfg, "SEED", 0)))
@@ -291,6 +317,7 @@ def run_tta(cfg, base_model):
             if scores:
                 all_results[f"{corruption}/mean_mIoU_across_rounds"] = float(np.mean(scores))
     else:
+        _run_clean_first_if_enabled()
         for corruption in cfg.TTA.CORRUPTIONS:
             corruption_scores = []
             for severity in cfg.TTA.SEVERITIES:
