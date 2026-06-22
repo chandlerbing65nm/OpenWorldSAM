@@ -25,6 +25,7 @@ from detectron2.utils.file_io import PathManager
 
 # tokenizing the prompts
 from transformers import AutoTokenizer
+from prompt_domains import load_prompt_domain_mapping, resolve_prompt_domain_file
 
 __all__ = ["OpenWorldSAM2SemanticDatasetMapper"]
 
@@ -169,7 +170,11 @@ class OpenWorldSAM2SemanticDatasetMapper:
         stuff_ids,
         metadata,
         tokenizer,
-        dataset_name
+        dataset_name,
+        use_prompt_domains=False,
+        prompt_domain="clean",
+        prompt_domain_root="",
+        prompt_domain_file="",
     ):
         self.is_train = is_train
         self.tfm_gens = augmentations
@@ -180,6 +185,22 @@ class OpenWorldSAM2SemanticDatasetMapper:
         self.metadata = metadata
         self.tokenizer = tokenizer
         self.dataset_name = dataset_name
+        self.use_prompt_domains = bool(use_prompt_domains)
+        self.prompt_domain = str(prompt_domain).lower()
+        self.prompt_domain_root = prompt_domain_root
+        self.prompt_domain_file = prompt_domain_file
+        self.prompt_domain_mapping = None
+
+        if self.use_prompt_domains:
+            resolved_file = resolve_prompt_domain_file(
+                dataset_name,
+                self.prompt_domain,
+                explicit_file=self.prompt_domain_file,
+                explicit_root=self.prompt_domain_root,
+            )
+            if not PathManager.isfile(resolved_file):
+                raise FileNotFoundError(f"Missing prompt domain file for {dataset_name}: {resolved_file}")
+            self.prompt_domain_mapping = load_prompt_domain_mapping(resolved_file)
 
         logger = logging.getLogger(__name__)
         mode = "training" if is_train else "inference"
@@ -191,6 +212,7 @@ class OpenWorldSAM2SemanticDatasetMapper:
 
         dataset_name = cfg.DATASETS.TRAIN[0] if is_train else cfg.DATASETS.TEST[0]
         meta = MetadataCatalog.get(dataset_name)
+        tta_cfg = getattr(cfg, "TTA", None)
         
         ignore_label = meta.ignore_label if hasattr(meta, "ignore_label") else 255
         stuff_ids = list(meta.stuff_dataset_id_to_contiguous_id.values())
@@ -207,7 +229,11 @@ class OpenWorldSAM2SemanticDatasetMapper:
             "stuff_ids": stuff_ids,
             "metadata": meta,
             "tokenizer": tokenizer,
-            "dataset_name": dataset_name
+            "dataset_name": dataset_name,
+            "use_prompt_domains": bool(getattr(tta_cfg, "USE_PROMPT_DOMAINS", False)) if tta_cfg is not None else False,
+            "prompt_domain": str(getattr(tta_cfg, "PROMPT_DOMAIN", "clean")) if tta_cfg is not None else "clean",
+            "prompt_domain_root": str(getattr(tta_cfg, "PROMPT_DOMAIN_ROOT", "")) if tta_cfg is not None else "",
+            "prompt_domain_file": str(getattr(tta_cfg, "PROMPT_DOMAIN_FILE", "")) if tta_cfg is not None else "",
         }
 
     def __call__(self, dataset_dict):
@@ -256,7 +282,12 @@ class OpenWorldSAM2SemanticDatasetMapper:
         dataset_dict["unique_categories"] = unique_categories
         # print(f"Unique categories: {unique_categories}")
         class_names = self.metadata.stuff_classes
-        dataset_dict["prompt"] = [class_names[id] for id in unique_categories]
+        if self.prompt_domain_mapping is not None:
+            dataset_dict["prompt"] = [
+                self.prompt_domain_mapping.get(id, class_names[id]) for id in unique_categories
+            ]
+        else:
+            dataset_dict["prompt"] = [class_names[id] for id in unique_categories]
 
         if len(unique_categories) == 0:
             dataset_dict["unique_categories"] = [0]

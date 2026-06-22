@@ -11,11 +11,13 @@ from detectron2.data import DatasetCatalog, MetadataCatalog, build_detection_tes
 from datasets import OpenWorldSAM2SemanticDatasetMapper
 from datasets.datasets.register_dutuseg_semseg import _get_dutuseg_sem_seg_meta
 from datasets.datasets.register_suim_semseg import _get_suim_sem_seg_meta
+from prompt_domains import ensure_prompt_domain_files, get_default_class_names
 from tta.conf import get_tta_init_weights
 from tta.method import build_tta_method
 from tta.sem_seg_tta_evaluator import TTASemSegEvaluator
 
 logger = logging.getLogger("open-world-sam2-tta")
+PROMPT_CORRUPTION_TTA_DOMAINS = ("character", "surface")
 
 
 def build_tta_dataset_name(dataset_key, corruption, severity):
@@ -97,11 +99,23 @@ def register_tta_dataset(cfg, corruption, severity):
     return dataset_name
 
 
-def build_tta_loader(cfg, dataset_name):
+def build_tta_loader(
+    cfg,
+    dataset_name,
+    use_prompt_domains_override=None,
+    prompt_domain_override=None,
+    prompt_domain_file_override=None,
+):
     loader_cfg = cfg.clone()
     loader_cfg.defrost()
     loader_cfg.DATASETS.TEST = (dataset_name,)
     loader_cfg.DATALOADER.NUM_WORKERS = int(cfg.TTA.NUM_WORKERS)
+    if use_prompt_domains_override is not None:
+        loader_cfg.TTA.USE_PROMPT_DOMAINS = bool(use_prompt_domains_override)
+    if prompt_domain_override is not None:
+        loader_cfg.TTA.PROMPT_DOMAIN = str(prompt_domain_override).lower()
+    if prompt_domain_file_override is not None:
+        loader_cfg.TTA.PROMPT_DOMAIN_FILE = str(prompt_domain_file_override)
     loader_cfg.freeze()
     mapper = OpenWorldSAM2SemanticDatasetMapper(loader_cfg, is_train=False)
     return build_detection_test_loader(
@@ -118,6 +132,24 @@ def use_clean_tta_data(cfg):
 
 def include_clean_as_first_domain(cfg):
     return bool(getattr(cfg.TTA, "INCLUDE_CLEAN_AS_FIRST_DOMAIN", False))
+
+
+def include_prompt_corruption_domains_as_last(cfg):
+    return bool(getattr(cfg.TTA, "INCLUDE_PROMPT_CORRUPTION_DOMAINS_AS_LAST", False))
+
+
+def use_prompt_domains(cfg):
+    return bool(getattr(cfg.TTA, "USE_PROMPT_DOMAINS", False))
+
+
+def get_prompt_corruption_tta_domains(cfg):
+    if use_clean_tta_data(cfg):
+        return []
+    if not include_clean_as_first_domain(cfg):
+        return []
+    if not include_prompt_corruption_domains_as_last(cfg):
+        return []
+    return list(PROMPT_CORRUPTION_TTA_DOMAINS)
 
 
 def get_clean_tta_dataset_name(cfg):
@@ -176,9 +208,14 @@ def _evaluate_domain(cfg, base_model, corruption, severity, tta_mode, output_dir
     return evaluate_loader(adapt_model, data_loader, evaluator)
 
 
-def _evaluate_clean_dataset(cfg, base_model, output_dir_suffix=None):
+def _evaluate_clean_dataset(cfg, base_model, output_dir_suffix=None, domain_name="clean", prompt_domain=None):
     dataset_name = get_clean_tta_dataset_name(cfg)
-    data_loader = build_tta_loader(cfg, dataset_name)
+    data_loader = build_tta_loader(
+        cfg,
+        dataset_name,
+        use_prompt_domains_override=True if prompt_domain is not None else None,
+        prompt_domain_override=prompt_domain,
+    )
     output_dir_parts = [
         cfg.OUTPUT_DIR,
         "tta",
@@ -186,7 +223,7 @@ def _evaluate_clean_dataset(cfg, base_model, output_dir_suffix=None):
     ]
     if output_dir_suffix is not None:
         output_dir_parts.append(output_dir_suffix)
-    output_dir_parts.append("clean")
+    output_dir_parts.append(domain_name)
     output_dir = os.path.join(*output_dir_parts)
     evaluator = TTASemSegEvaluator(dataset_name, distributed=False, output_dir=output_dir)
 
@@ -196,6 +233,13 @@ def _evaluate_clean_dataset(cfg, base_model, output_dir_suffix=None):
 
 
 def run_tta(cfg, base_model):
+    if use_prompt_domains(cfg) or get_prompt_corruption_tta_domains(cfg):
+        ensure_prompt_domain_files(
+            str(cfg.TTA.DATASET).lower(),
+            prompt_root=str(getattr(cfg.TTA, "PROMPT_DOMAIN_ROOT", "")),
+            class_names=get_default_class_names(str(cfg.TTA.DATASET).lower()),
+        )
+
     weights_path = get_tta_init_weights(cfg)
     DetectionCheckpointer(base_model).resume_or_load(weights_path, resume=False)
     source_state = copy.deepcopy(base_model.state_dict())
@@ -206,6 +250,7 @@ def run_tta(cfg, base_model):
     all_results = {}
     summary_scores = []
     prepend_clean = include_clean_as_first_domain(cfg) and not use_clean_tta_data(cfg)
+    prompt_tail_domains = get_prompt_corruption_tta_domains(cfg)
 
     def _mean_metric(metric_name):
         values = []
@@ -236,6 +281,37 @@ def run_tta(cfg, base_model):
             get_clean_tta_dataset_name(cfg),
             metrics_str,
         )
+
+    def _run_prompt_domain_tail_if_enabled(output_dir_suffix=None):
+        if not prompt_tail_domains:
+            return
+
+        for prompt_domain in prompt_tail_domains:
+            if prompt_domain in all_results:
+                continue
+
+            if tta_mode == "normal_tta":
+                base_model.load_state_dict(source_state, strict=True)
+
+            results = _evaluate_clean_dataset(
+                cfg,
+                base_model,
+                output_dir_suffix=output_dir_suffix,
+                domain_name=prompt_domain,
+                prompt_domain=prompt_domain,
+            )
+            all_results[prompt_domain] = results
+            miou = float(results["sem_seg"]["mIoU"])
+            metrics_str = _format_sem_seg_metrics(results)
+            summary_scores.append(miou)
+            logger.info(
+                "[TTA][PROMPT-DOMAIN] mode=%s method=%s domain=%s dataset=%s %s",
+                tta_mode,
+                cfg.TTA.METHOD,
+                prompt_domain,
+                get_clean_tta_dataset_name(cfg),
+                metrics_str,
+            )
 
     if use_clean_tta_data(cfg):
         if tta_mode == "normal_tta":
@@ -316,6 +392,7 @@ def run_tta(cfg, base_model):
         for corruption, scores in round_corruption_scores.items():
             if scores:
                 all_results[f"{corruption}/mean_mIoU_across_rounds"] = float(np.mean(scores))
+        _run_prompt_domain_tail_if_enabled()
     else:
         _run_clean_first_if_enabled()
         for corruption in cfg.TTA.CORRUPTIONS:
@@ -351,6 +428,7 @@ def run_tta(cfg, base_model):
                     corruption,
                     corruption_mean_miou,
                 )
+        _run_prompt_domain_tail_if_enabled()
 
     summary = {
         "tta_mode": tta_mode,

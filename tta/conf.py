@@ -34,6 +34,11 @@ def add_tta_config(cfg):
     cfg.TTA.BATCH_SIZE = 1
     cfg.TTA.USE_CLEAN_DATA = False
     cfg.TTA.INCLUDE_CLEAN_AS_FIRST_DOMAIN = False
+    cfg.TTA.USE_PROMPT_DOMAINS = False
+    cfg.TTA.INCLUDE_PROMPT_CORRUPTION_DOMAINS_AS_LAST = False
+    cfg.TTA.PROMPT_DOMAIN = "clean"
+    cfg.TTA.PROMPT_DOMAIN_ROOT = ""
+    cfg.TTA.PROMPT_DOMAIN_FILE = ""
     cfg.TTA.TTA_MODE = "normal_tta"
     cfg.TTA.TTA_ROUNDS = 10
     cfg.TTA.EPISODIC = False
