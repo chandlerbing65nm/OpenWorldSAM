@@ -5,6 +5,7 @@ import os
 import random
 
 import numpy as np
+import torch
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.data import DatasetCatalog, MetadataCatalog, build_detection_test_loader
 
@@ -138,8 +139,17 @@ def include_prompt_corruption_domains_as_last(cfg):
     return bool(getattr(cfg.TTA, "INCLUDE_PROMPT_CORRUPTION_DOMAINS_AS_LAST", False))
 
 
+def use_domain_generalization(cfg):
+    return bool(getattr(cfg.TTA, "DOMAIN_GEN", False))
+
+
 def use_prompt_domains(cfg):
     return bool(getattr(cfg.TTA, "USE_PROMPT_DOMAINS", False))
+
+
+def get_domain_gen_unadapted_corruptions(cfg):
+    values = getattr(cfg.TTA, "DOMAIN_GEN_UNADAPTED_CORRUPTIONS", [])
+    return [str(value).lower() for value in values]
 
 
 def get_prompt_corruption_tta_domains(cfg):
@@ -180,6 +190,20 @@ def evaluate_loader(model, data_loader, evaluator):
     return evaluator.evaluate()
 
 
+def evaluate_loader_without_adaptation(adapt_model, data_loader, evaluator):
+    evaluator.reset()
+    base_model = getattr(adapt_model, "model", adapt_model)
+    was_training = base_model.training
+    base_model.eval()
+    with torch.no_grad():
+        for inputs in data_loader:
+            outputs = base_model(inputs)
+            evaluator.process(inputs, outputs)
+    if was_training:
+        base_model.train()
+    return evaluator.evaluate()
+
+
 def _format_sem_seg_metrics(results):
     sem_seg = results.get("sem_seg", {}) if isinstance(results, dict) else {}
     metrics = []
@@ -206,6 +230,26 @@ def _evaluate_domain(cfg, base_model, corruption, severity, tta_mode, output_dir
     base_model.metadata = MetadataCatalog.get(dataset_name)
     adapt_model = build_tta_method(cfg, base_model)
     return evaluate_loader(adapt_model, data_loader, evaluator)
+
+
+
+def _evaluate_domain_without_adaptation(cfg, base_model, corruption, severity, output_dir_suffix=None):
+    dataset_name = register_tta_dataset(cfg, corruption, severity)
+    data_loader = build_tta_loader(cfg, dataset_name)
+    output_dir_parts = [
+        cfg.OUTPUT_DIR,
+        "tta",
+        str(cfg.TTA.METHOD).lower(),
+    ]
+    if output_dir_suffix is not None:
+        output_dir_parts.append(output_dir_suffix)
+    output_dir_parts.extend([corruption, str(severity)])
+    output_dir = os.path.join(*output_dir_parts)
+    evaluator = TTASemSegEvaluator(dataset_name, distributed=False, output_dir=output_dir)
+
+    base_model.metadata = MetadataCatalog.get(dataset_name)
+    adapt_model = build_tta_method(cfg, base_model)
+    return evaluate_loader_without_adaptation(adapt_model, data_loader, evaluator)
 
 
 def _evaluate_clean_dataset(cfg, base_model, output_dir_suffix=None, domain_name="clean", prompt_domain=None):
@@ -246,11 +290,31 @@ def run_tta(cfg, base_model):
     tta_mode = str(cfg.TTA.TTA_MODE).lower()
     if tta_mode not in {"normal_tta", "cont_tta", "lifelong_rand_cont_tta"}:
         raise ValueError(f"Unsupported TTA mode: {cfg.TTA.TTA_MODE}")
+    if use_domain_generalization(cfg) and tta_mode != "normal_tta":
+        raise ValueError("TTA.DOMAIN_GEN currently only supports TTA_MODE='normal_tta'")
 
     all_results = {}
     summary_scores = []
     prepend_clean = include_clean_as_first_domain(cfg) and not use_clean_tta_data(cfg)
     prompt_tail_domains = get_prompt_corruption_tta_domains(cfg)
+    domain_gen_unadapted = set(get_domain_gen_unadapted_corruptions(cfg)) if use_domain_generalization(cfg) else set()
+    domain_gen_adapted = [
+        str(corruption).lower()
+        for corruption in cfg.TTA.CORRUPTIONS
+        if str(corruption).lower() not in domain_gen_unadapted
+    ]
+    domain_gen_evaluated = [
+        str(corruption).lower()
+        for corruption in cfg.TTA.CORRUPTIONS
+        if str(corruption).lower() in domain_gen_unadapted
+    ]
+
+    if use_domain_generalization(cfg):
+        logger.info(
+            "[TTA][DOMAIN-GEN] adapted_corruptions=%s unadapted_eval_corruptions=%s",
+            domain_gen_adapted,
+            domain_gen_evaluated,
+        )
 
     def _mean_metric(metric_name):
         values = []
@@ -395,13 +459,21 @@ def run_tta(cfg, base_model):
         _run_prompt_domain_tail_if_enabled()
     else:
         _run_clean_first_if_enabled()
+        if use_domain_generalization(cfg):
+            base_model.load_state_dict(source_state, strict=True)
+
         for corruption in cfg.TTA.CORRUPTIONS:
+            corruption_key = str(corruption).lower()
+            should_skip_adaptation = use_domain_generalization(cfg) and corruption_key in domain_gen_unadapted
             corruption_scores = []
             for severity in cfg.TTA.SEVERITIES:
-                if tta_mode == "normal_tta":
+                if tta_mode == "normal_tta" and not use_domain_generalization(cfg):
                     base_model.load_state_dict(source_state, strict=True)
 
-                results = _evaluate_domain(cfg, base_model, corruption, severity, tta_mode)
+                if should_skip_adaptation:
+                    results = _evaluate_domain_without_adaptation(cfg, base_model, corruption, severity)
+                else:
+                    results = _evaluate_domain(cfg, base_model, corruption, severity, tta_mode)
 
                 key = f"{corruption}/severity_{severity}"
                 all_results[key] = results
@@ -410,11 +482,12 @@ def run_tta(cfg, base_model):
                 corruption_scores.append(miou)
                 summary_scores.append(miou)
                 logger.info(
-                    "[TTA][DOMAIN] mode=%s method=%s domain=%s severity=%s %s",
+                    "[TTA][DOMAIN] mode=%s method=%s domain=%s severity=%s adapted=%s %s",
                     tta_mode,
                     cfg.TTA.METHOD,
                     corruption,
                     severity,
+                    not should_skip_adaptation,
                     metrics_str,
                 )
 
@@ -422,10 +495,11 @@ def run_tta(cfg, base_model):
                 corruption_mean_miou = float(np.mean(corruption_scores))
                 all_results[f"{corruption}/mean_mIoU"] = corruption_mean_miou
                 logger.info(
-                    "[TTA][CORRUPTION] mode=%s method=%s corruption=%s mean_mIoU=%.4f",
+                    "[TTA][CORRUPTION] mode=%s method=%s corruption=%s adapted=%s mean_mIoU=%.4f",
                     tta_mode,
                     cfg.TTA.METHOD,
                     corruption,
+                    not should_skip_adaptation,
                     corruption_mean_miou,
                 )
         _run_prompt_domain_tail_if_enabled()
@@ -434,6 +508,8 @@ def run_tta(cfg, base_model):
         "tta_mode": tta_mode,
         "method": str(cfg.TTA.METHOD).lower(),
         "weights": weights_path,
+        "domain_gen": use_domain_generalization(cfg),
+        "domain_gen_unadapted_corruptions": list(domain_gen_evaluated),
         "mean_mIoU": float(np.mean(summary_scores)) if summary_scores else 0.0,
         "mean_mDice": _mean_metric("mDice"),
         "mean_BoundaryF1": _mean_metric("BoundaryF1"),

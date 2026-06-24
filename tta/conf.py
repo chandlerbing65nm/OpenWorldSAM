@@ -18,6 +18,13 @@ DEFAULT_SUIM_C_CORRUPTIONS = [
     "shot_noise",
 ]
 DEFAULT_SUIM_C_SEVERITIES = [1, 3, 5]
+DEFAULT_TTA_DOMAIN_GEN_UNADAPTED_CORRUPTIONS = [
+    "fog",
+    "brightness",
+    "contrast",
+    "pixelate",
+    "jpeg_compression",
+]
 
 
 def add_tta_config(cfg):
@@ -39,6 +46,8 @@ def add_tta_config(cfg):
     cfg.TTA.PROMPT_DOMAIN = "clean"
     cfg.TTA.PROMPT_DOMAIN_ROOT = ""
     cfg.TTA.PROMPT_DOMAIN_FILE = ""
+    cfg.TTA.DOMAIN_GEN = False
+    cfg.TTA.DOMAIN_GEN_UNADAPTED_CORRUPTIONS = list(DEFAULT_TTA_DOMAIN_GEN_UNADAPTED_CORRUPTIONS)
     cfg.TTA.TTA_MODE = "normal_tta"
     cfg.TTA.TTA_ROUNDS = 10
     cfg.TTA.EPISODIC = False
@@ -88,6 +97,10 @@ def add_tta_config(cfg):
 
     cfg.TTA.RPL = CN()
     cfg.TTA.RPL.Q = 0.8
+    cfg.TTA.RPL.PSEUDO_LABEL_TYPE = "hard"
+    cfg.TTA.RPL.TEMPERATURE = 1.0
+    cfg.TTA.RPL.CONFIDENCE_FILTER = "off"
+    cfg.TTA.RPL.CONFIDENCE_THRESHOLD = 0.0
 
     cfg.TTA.SAR = CN()
     cfg.TTA.SAR.MARGIN_E0 = 0.4
